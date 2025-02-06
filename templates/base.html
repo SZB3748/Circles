@@ -1,0 +1,32 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en-US">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        {{block "description" .}}<meta name="description" content="">{{end}}
+        <title>{{block "title" .}}Circles{{end}}</title>
+
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+
+        <link rel="stylesheet" as="style" type="text/css" href="/static/css/base.css">
+        {{block "styles" .}}{{end}}
+        <script src="/static/js/base.js" defer></script>
+        {{block "scripts" .}}{{end}}
+
+        {{block "head" .}}{{end}}
+    </head>
+    <body>
+        <nav class="navbar">
+        </nav>
+        <div class="base-content">
+            {{block "body" .}}{{end}}
+        </div>
+        <footer>
+            <p>THis is the footer :)</p>
+        </footer>
+    </body>
+</html>
+{{end}}
