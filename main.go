@@ -30,7 +30,17 @@ var (
 )
 
 func main() {
-	if err := StartServer("127.0.0.1", 8080); err != nil {
+	var err error
+
+	MainDB, err = DatabaseConnect("main")
+	if err != nil {
+		panic(err)
+	} else if err = MainDB.Ping(); err != nil {
+		panic(err)
+	}
+
+	err = StartServer("127.0.0.1", 8080)
+	if err != nil {
 		panic(err)
 	}
 }

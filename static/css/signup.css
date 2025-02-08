@@ -1,0 +1,63 @@
+main {
+    display: flex;
+    justify-content: center;
+    margin-top: 5vh;
+}
+
+h1 {
+    margin: 0;
+    text-align: center;
+}
+
+#login-form {
+    min-width: 200px;
+    min-height: 205px;
+    --size: min(300px, calc(100vmin - 254px - 2rem)); /* 246 = min-width + .base-content margin * 2 + .c1 border-width * 2 */
+    margin: calc(353px - var(--size) / 2);
+    padding: 1rem;
+    width: var(--size);
+    height: var(--size);
+    display: flex;
+    flex-direction: column;
+}
+
+.error {
+    background-color: #a006;
+}
+
+#login-form .row {
+    display: flex;
+    flex-wrap: wrap;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#login-form .row > * {
+    display: inline-block;
+}
+
+#login-form .row > input {
+    font: inherit;
+}
+
+#login-form .pair {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+}
+
+#login-form .grow {
+    flex-grow: 1;
+    max-height: 175px;
+}
+
+#login-form .top {
+    margin-bottom: auto;
+}
+
+#login-form .bottom {
+    margin-top: auto;
+    padding-top: 0.5rem;
+    justify-content: center;
+}

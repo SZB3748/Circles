@@ -1,0 +1,45 @@
+{{template "base" .}}
+{{define "title"}}Circles | Account{{end}}
+{{define "styles"}}
+<link rel="stylesheet" as="style" type="text/css" href="/static/css/account.css">
+{{end}}
+{{define "scripts"}}
+<script src="/static/js/account.js"></script>
+{{if .IsMine}}
+<script src="/static/js/account_edit.js"></script>
+{{end}}
+{{end}}
+{{define "body"}}
+<main>
+    <div id="account-info-parent" class="circle c1 hidden">
+        <div id="account-info">
+            <div class="row">
+                <img id="account-icon" src="/media/{{.Icon}}" alt="icon">
+                {{ with .DisplayName }}
+                <h3 id="account-name" class="resize-font">{{.}}</h3>
+                {{else}}
+                <h3 id="account-name" class="resize-font" no-display-name>{{.Name}}</h3>
+                {{end}}
+            </div>
+            <div class="pair grow">
+                <b>Bio</b>
+                <div id="account-bio" raw="{{.BioRaw}}">
+                    {{with .Bio}}
+                    {{.}}
+                    {{else}}
+                    <p><i>No Bio</i></p>
+                    {{end}}
+                </div>
+            </div>
+            <div class="row bottom">
+                {{if .IsMine}}
+                <button id="edit-button">Edit</button>
+                <button id="logout-button">Logout</button>
+                {{else}}
+                <button id="message-button">Message</button>
+                {{end}}
+            </div>
+        </div>
+    </div>
+</main>
+{{end}}

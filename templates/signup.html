@@ -1,0 +1,47 @@
+{{template "base" .}}
+{{define "title"}}Circles | Create Account{{end}}
+{{define "styles"}}
+<link rel="stylesheet" as="style" type="text/css" href="/static/css/signup.css">
+{{end}}
+{{define "scripts"}}
+<script src="/static/js/signup.js"></script>
+{{end}}
+{{define "body"}}
+<main>
+    <div id="login-form-parent" class="circle c1 hidden">
+        <form id="login-form" method="post">
+            <h1 class="top">Circles</h1>
+            <div class="pair grow">
+                <div class="row">
+                    <label for="field-username">Username</label>
+                    <input id="field-username" name="username" required minlength="2" maxlength="32">
+                </div>
+                <div class="row">
+                    <label for="field-password">Password</label>
+                    <input id="field-password" name="password" type="password" required minlength="8" maxlength="64">
+                </div>
+                <div class="row">
+                    <label for="field-confirm-password">Confirm</label>
+                    <input id="field-confirm-password" type="password" required>
+                </div>
+            </div>
+            <div class="row">
+                <span>Existing Account? <a href="/login">Login</a></span>
+            </div>
+            <div class="row bottom">
+                <button>Sign Up</button>
+            </div>
+        </form>
+    </div>
+</main>
+{{with .Error}}
+<script>
+    function signupError() {
+        const toast = addTopToast("{{.}}", 6000);
+        toast.classList.add("error");
+    }
+    window.addEventListener("load", signupError, {once: true});    
+    document.currentScript.remove();
+</script>
+{{end}}
+{{end}}
