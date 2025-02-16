@@ -322,11 +322,31 @@ func RouteAccountEdit(c echo.Context) error {
 		stmtSize += len("displayname")+2
 	}
 	if bioAll, ok := c.Request().PostForm["bio"]; ok && len(bioAll) > 0 {
-		bio := bioAll[0]
+
+		bio := strings.ReplaceAll(strings.TrimSpace(bioAll[0]), "\r", "")
+		l := len(bio)
+		if strings.Contains(bio, "\n\n") {
+			builder := strings.Builder{}
+			builder.Grow(l/2)
+			lastWasNewline := false
+			for i := 0; i < l; i++ {
+				c := bio[i]
+				if c == '\n' {
+					if lastWasNewline || i == l-1 {
+						continue
+					}
+					lastWasNewline = true
+				} else if lastWasNewline {
+					lastWasNewline = false
+				}
+				builder.WriteByte(c)
+			}
+			bio = builder.String()
+		}
+
 		if len(bio) > 400 {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "Invalid bio.")
 		}
-		bio = strings.Replace(bio, "\n\n", "\n", -1)
 		attrs = append(attrs, "bio")
 		values = append(values, bio)
 		stmtSize += len("bio")+2
