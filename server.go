@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
-	"html"
-	"html/template"
+	"encoding/json"
+	"errors"
+	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,11 +38,16 @@ var (
 	CRAWLERS_DIR = filepath.Join(DIR, "crawlers")
 )
 
+
+
 const (
 	USERNAME_ALLOWED = "abcdefghijklmnopqrstuvwxyz0123456789"
 	USERNAME_SYMBOLS = "-_."
 	SERVER_SESSION_NAME = "session"
 	SERVER_SESSION_ID = "id"
+
+	MEDIA_FILE_RCOUNT int = 36
+	MEDIA_FILE_NAME_RANGE = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_"
 )
 
 //TODO get circle's parents
@@ -51,6 +58,29 @@ WITH RECURSIVE rec AS (
   UNION ALL SELECT c.id, c.parent_id, (r.depth+1) FROM circles c JOIN rec r ON c.id = r.parent_id
 ) SELECT parent_id, depth FROM rec WHERE parent_id IS NOT NULL ORDER BY depth ASC; --nearest to furthest
 */
+
+func CreateMediaFile(ext string, src io.Reader) (string, error) {
+	builder := strings.Builder{}
+	size := MEDIA_FILE_RCOUNT + len(ext) + 1
+	builder.Grow(size)
+	l := len(MEDIA_FILE_NAME_RANGE)
+	for i := 0; i < MEDIA_FILE_RCOUNT; i++ {
+		builder.WriteByte(MEDIA_FILE_NAME_RANGE[rand.Intn(l)])
+	}
+	builder.WriteByte('.')
+	builder.WriteString(ext)
+	
+	name := builder.String()
+
+	file, err := os.OpenFile(filepath.Join(MEDIA_DIR, name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
+	if err != nil {
+		return name, err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, src)
+	return name, err
+}
 
 func RouteIndex(c echo.Context) error {
 	return c.Render(http.StatusOK, "index.html", nil)
@@ -213,33 +243,180 @@ func RouteAccount(c echo.Context) error {
 		c.Logger().Error(err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to find user")
 	}
-	var bioFinal template.HTML
-	if len(bio) > 0 {
-		builder := strings.Builder{}
-		bioLines := strings.Split(bio, "\n")
-		size := len(bioLines) * 7
-		for _, line := range bioLines {
-			size += len(line)
-		}
-		builder.Grow(size)
-		for _, line := range bioLines {
-			builder.WriteString("<p>")
-			builder.WriteString(html.EscapeString(line))
-			builder.WriteString("</p>")
-		}
-		bioFinal = template.HTML(builder.String())
-	} else {
-		bioFinal = ""
-	}
 	return c.Render(http.StatusOK, "account.html", map[string]interface{}{
 		"Name": accountName,
+		"NoDisplayName": displayname == nil,
 		"DisplayName": displayname,
 		"Icon": pfp,
-		"Bio": bioFinal,
-		"BioRaw": bio,
+		"Bio": bio,
 		"IsMine": isMine,
 	})
 }
+
+func RouteAccountEdit(c echo.Context) error {
+	name := c.Param("name")
+
+	row := MainDB.QueryRow("SELECT id FROM accounts WHERE username=?", name)
+	var accountId int64
+	if err := row.Scan(&accountId); err != nil {
+		if err == sql.ErrNoRows {
+			b := strings.Builder{}
+			b.Grow(21 + len(name))
+			b.WriteString("User ")
+			b.WriteString(name)
+			b.WriteString(" does not exist.")
+			return echo.NewHTTPError(http.StatusNotFound, b.String())
+		}
+		c.Logger().Error(err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed")
+	}
+
+	c.Request().ParseForm()
+	
+	hasIcon := true
+	iconFile, err := c.FormFile("pfp")
+	if err != nil {
+		if errors.Is(err, http.ErrMissingFile) {
+			hasIcon = false
+		} else {
+			c.Logger().Error(err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load profile picture submission info.")
+		}
+	}
+
+	attrs := make([]string, 0)
+	values := make([]interface{}, 0)
+	stmtSize := 31
+
+	if usernameAll, ok := c.Request().PostForm["username"]; ok && len(usernameAll) > 0 && name != usernameAll[0] {
+		username := usernameAll[0]
+		if !validateUsername(username) {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "Invalid username.")
+		}
+		row := MainDB.QueryRow("SELECT id FROM accounts WHERE username=?", username)
+		var id int64;
+		err := row.Scan(&id)
+		if err == nil {
+			return echo.NewHTTPError(http.StatusForbidden, "This username already exists.")
+		} else if err != sql.ErrNoRows {
+			c.Logger().Error(err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to validate username.")
+		}
+
+		attrs = append(attrs, "username")
+		values = append(values, username)
+		stmtSize += len("username")+2
+	}
+	if displaynameAll, ok := c.Request().PostForm["displayname"]; ok && len(displaynameAll) > 0 {
+		displayname := displaynameAll[0]
+		l := len(displayname)
+		if l == 1 || l > 32 {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "Invalid display name.")
+		}
+		attrs = append(attrs, "displayname")
+		if l < 1 {
+			values = append(values, nil)
+		} else {
+			values = append(values, displayname)
+		}
+		stmtSize += len("displayname")+2
+	}
+	if bioAll, ok := c.Request().PostForm["bio"]; ok && len(bioAll) > 0 {
+		bio := bioAll[0]
+		if len(bio) > 400 {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "Invalid bio.")
+		}
+		bio = strings.Replace(bio, "\n\n", "\n", -1)
+		attrs = append(attrs, "bio")
+		values = append(values, bio)
+		stmtSize += len("bio")+2
+	}
+	iconName := ""
+	if hasIcon {
+		iconExtIndex := strings.IndexByte(iconFile.Filename, '.')
+		if iconExtIndex < 0 {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "Unknown file type.")
+		}
+		iconExt := iconFile.Filename[iconExtIndex+1:]
+		iconSrc, err := iconFile.Open()
+		if err != nil {
+			c.Logger().Error(err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load profile picture submission.")
+		}
+		defer iconSrc.Close()
+
+		iconName, err = CreateMediaFile(iconExt, iconSrc)
+		if err != nil {
+			c.Logger().Error(err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save profile picture submission.")
+		}
+
+		attrs = append(attrs, "pfp")
+		values = append(values, iconName)
+		stmtSize += len("pfp")+2
+	}
+
+	if len(attrs) < 1 {
+		return c.JSONBlob(http.StatusOK, []byte("{}"))
+	}
+	
+	lenMin1 := len(attrs) - 1
+	if lenMin1 > 0 {
+		stmtSize += lenMin1
+	}
+	
+	stmtBuilder := strings.Builder{}
+	stmtBuilder.Grow(stmtSize)
+	stmtBuilder.WriteString("UPDATE accounts SET ")
+	for i := 0; i < lenMin1; i++ {
+		stmtBuilder.WriteString(attrs[i])
+		stmtBuilder.WriteString("=?,")
+	}
+	stmtBuilder.WriteString(attrs[lenMin1])
+		stmtBuilder.WriteString("=?")
+	stmtBuilder.WriteString(" WHERE id=?")
+
+	values = append(values, accountId)
+
+	_, err = MainDB.Exec(stmtBuilder.String(), values...)
+	if err != nil {
+		c.Logger().Error(err)
+		if len(iconName) > 0 {
+			if err := os.Remove(filepath.Join(MEDIA_DIR, iconName)); err != nil {
+				c.Logger().Error(err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete upload.")
+			}
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to make changes.")
+	}
+
+	newValues := make(map[string]interface{}, len(attrs))
+	for i := 0; i < len(attrs); i++ {
+		newValues[attrs[i]] = values[i]
+	}
+	jsonBlob, err := json.Marshal(newValues)
+	if err != nil {
+		c.Logger().Error(err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to format modified profile data.")
+	}
+
+	return c.JSONBlob(http.StatusOK, jsonBlob)
+}
+
+func RouteLogout(c echo.Context) error {
+	sessionId, err := GetSessionId(c)
+	if err != nil {
+		c.Logger().Error(err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Session ID missing.")
+	}
+	_, err = MainDB.Exec("DELETE FROM logins WHERE session_id=?", sessionId)
+	if err != nil {
+		c.Logger().Error(err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to logout session.")
+	}
+	return c.NoContent(http.StatusOK)
+}
+
 
 func GetSession(c echo.Context) (*sessions.Session, error) {
 	return session.Get(SERVER_SESSION_NAME, c)
@@ -323,15 +500,17 @@ func BindRoutes() error {
 	)
 	
 	App.Static("/static", STATIC_DIR)
-	App.Static("/media", MEDIA_DIR)
+	App.Static("/media", MEDIA_DIR).Name = "Media"
 	App.File("/robots.txt", filepath.Join(CRAWLERS_DIR, "robots.txt"))
 	App.GET("/", RouteIndex).Name = "Index"
 	App.GET("/@", RouteAccount)
 	App.GET("/@:name", RouteAccount)
+	App.POST("/@:name/edit", RouteAccountEdit)
 	App.GET("/login", RouteLogin).Name = "Login"
 	App.POST("/login", RouteLoginPost)
 	App.GET("/signup", RouteSignup)
 	App.POST("/signup", RouteSignupPost)
+	App.POST("/logout", RouteLogout)
 	return nil
 }
 

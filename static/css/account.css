@@ -5,8 +5,8 @@ main {
 }
 
 #account-info{
-    min-width: 200px;
-    min-height: 200px;
+    min-width: 250px;
+    min-height: 250px;
     --size: min(500px, calc(100vmin - 254px - 2rem)); /* 246 = min-width + .base-content margin * 2 + .c1 border-width * 2 */
     margin: calc(353px - var(--size) / 2);
     padding: 1rem;
@@ -60,13 +60,98 @@ main {
 
 #account-bio {
     overflow-y: auto;
+    max-height: 300px;
+    margin-bottom: auto;
+}
+
+#account-bio:has(> #account-bio-edit) {
+    flex-grow: 1;
+    overflow-y: visible;
 }
 
 #account-bio > p {
     margin-top: 0;
 }
 
-#bio-edit {
+#account-bio-edit {
+    width: 95%;
+    height: 100%;
+    min-width: fit-content;
+}
+
+#icon-container {
+    position: relative;;
+}
+
+#edit-icon {
+    background-color: #0007;
+    color: #fff;
+    user-select: none;
+    border-radius: 2px;
+
+    opacity: 1;
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.25s ease-in;
+    text-align: center;
+}
+
+#edit-icon:not(:hover) {
+    opacity: 0;
+    transition: opacity 0.25s ease-out;
+}
+
+
+#edit-icon-preview-container {
+    background-color: #0007;
+    position: fixed;
+    top: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+}
+
+#edit-icon-preview-container.hidden {
+    display: none;
+}
+
+#edit-icon-preview-container h1 {
+    margin-top: 0;
+    text-align: center;
+}
+
+#edit-icon-preview {
+    background-color: #fff;
+    min-width: 215px;
+    min-height: 215px;
+    width: min(300px, 100vmin);
+    height: min(300px, 100vmin);
+    margin-left: 50%;
+    transform: translateX(-50%);
+    padding: 2.75rem;
+    border-radius: 10px;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#changed-account-icon {
+    max-width: 50%;
+    height: auto;
+    aspect-ratio: 1/1;
+}
+
+#edit-icon-preview-container .row {
+    margin-top: auto;
 }

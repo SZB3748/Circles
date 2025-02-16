@@ -14,18 +14,18 @@
     <div id="account-info-parent" class="circle c1 hidden">
         <div id="account-info">
             <div class="row">
-                <img id="account-icon" src="/media/{{.Icon}}" alt="icon">
-                {{ with .DisplayName }}
-                <h3 id="account-name" class="resize-font">{{.}}</h3>
-                {{else}}
-                <h3 id="account-name" class="resize-font" no-display-name>{{.Name}}</h3>
-                {{end}}
+                <div id="icon-container">
+                    <img id="account-icon" src="/media/{{.Icon}}" alt="icon">
+                    
+                </div>
+                <h3 id="account-name" class="resize-font" username="{{.Name}}"
+                    {{if .NoDisplayName}}no-display-name{{end}}
+                >{{with .DisplayName}}{{.}}{{else}}{{.Name}}{{end}}</h3>
             </div>
             <div class="pair grow">
                 <b>Bio</b>
-                <div id="account-bio" raw="{{.BioRaw}}">
+                <div id="account-bio" raw="{{.Bio}}">
                     {{with .Bio}}
-                    {{.}}
                     {{else}}
                     <p><i>No Bio</i></p>
                     {{end}}
@@ -42,4 +42,14 @@
         </div>
     </div>
 </main>
+<div id="edit-icon-preview-container" class="hidden">
+    <div id="edit-icon-preview">
+        <h1>New Icon</h1>
+        <img id="changed-account-icon" alt="new icon">
+        <div class="row">
+            <button id="changed-account-confirm">Confirm</button>
+            <button id="changed-account-cancel">Cancel</button>
+        </div>
+    </div>
+</div>
 {{end}}
