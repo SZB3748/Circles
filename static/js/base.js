@@ -85,9 +85,14 @@ function formatLine(line, dest, excluded, isInput) {
     let current = 0;
 
     for (const match of line.matchAll(REGEX_LINE_FORMAT_ALL)) {
-        const plainText = document.createElement("span");
-        plainText.innerText = unescapeFormattedText(line.slice(current, match.index));
-        dest.appendChild(plainText);
+        if (isInput)
+            unescapeFormattedTextInput(line.slice(current, match.index), dest);
+        else {
+            const plainText = document.createElement("span");
+            plainText.innerText = unescapeFormattedText(line.slice(current, match.index));
+            if (plainText.innerText.length > 0)
+                dest.appendChild(plainText);
+        }
 
         const header = match.groups["header"];
         const url = match.groups["url"];
@@ -104,74 +109,176 @@ function formatLine(line, dest, excluded, isInput) {
             const level = match.groups["headerlevel"];
             const text = match.groups["headertext"];
             const h = document.createElement(`h${level.length}`);
-            h.innerText = unescapeFormattedText(isInput ? `${level} ${text}` : text);
+            if (isInput) {
+                const pre = document.createElement("span");
+                pre.classList.add("formatting-token");
+                pre.innerText = level + " ";
+                h.appendChild(pre);
+                unescapeFormattedTextInput(text, h);
+            } else h.innerText = unescapeFormattedText(isInput ? `${level} ${text}` : text);
             dest.appendChild(h);
         } else if (url !== undefined && !excluded.includes("url")) {
             current = match.index + url.length;
             const href = match.groups["urlhref"];
             const domain = match.groups["urldomain"];
             const name = match.groups["urlname"];
-            const a = document.createElement("a");
-            if (href.startsWith(domain))
-                a.href = `https://${href}`;
-            else
-                a.href = href;
-            if (name)
-                formatLine(name, a, [...excluded, "url"], isInput);
-            else
-                a.innerText = a.href;
-            dest.appendChild(a);
+            if (isInput) {
+                const aContainer = document.createElement("span");
+                const preLink = document.createElement("span");
+                const between = document.createElement("span");
+                const afterName = document.createElement("span");
+                const linkText = document.createElement("span");
+                const nameText = document.createElement("span");
+                aContainer.classList.add("a-preview");
+                aContainer.setAttribute("href", href.startsWith(domain) ? `https://${href}` : a.href = href)
+                preLink.classList.add("formatting-token");
+                between.classList.add("formatting-token");
+                afterName.classList.add("formatting-token");
+
+                preLink.innerText = "[";
+                between.innerText = "](";
+                afterName.innerText = ")";
+
+                if (name.trim())
+                    formatLine(name, nameText, [...excluded, "url"], isInput);
+                else
+                    nameText.innerText = name;
+                linkText.innerText = href;
+
+                aContainer.append(preLink, linkText, between, nameText, afterName);
+                dest.appendChild(aContainer);
+            } else {
+                const a = document.createElement("a");
+                a.href = href.startsWith(domain) ? `https://${href}` : a.href = href;
+                if (name)
+                    formatLine(name, a, [...excluded, "url"], isInput);
+                else
+                    a.innerText = a.href;
+                dest.appendChild(a);
+            }
         } else if (code !== undefined && !excluded.includes("code")) {
             current = match.index + code.length;
             const c = document.createElement("code");
-            c.innerText = match.groups["codetext"];
+            const text = match.groups["codetext"];
+            if (isInput) {
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "`";
+                c.appendChild(tokenPre);
+                unescapeFormattedTextInput(text, c);
+                c.appendChild(tokenPost);
+            } else c.innerText = unescapeFormattedText(text);
             dest.appendChild(c);
         } else if (code3 !== undefined && !excluded.includes("code")) {
             current = match.index + code3.length;
             const pre = document.createElement("pre");
             const c = document.createElement("code");
-            c.innerText = match.groups["code3text"];
+            const text = match.groups["code3text"];
+            if (isInput) {
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "```";
+                c.appendChild(tokenPre);
+                unescapeFormattedTextInput(text, c);
+                c.appendChild(tokenPost);
+            } else c.innerText = unescapeFormattedText(text);
             pre.appendChild(c);
             dest.appendChild(pre);
         } else if (bold !== undefined && !excluded.includes("bold")) {
             current = match.index + bold.length;
             const b = document.createElement("b");
             const text = match.groups["boldtext"];
-            formatLine(isInput ? `&#42;&#42;${text}&#42;&#42;` : text, b, [...excluded, "bold"], isInput);
+            if (isInput) {
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "**";
+                b.appendChild(tokenPre);
+                formatLine(text, b, [...excluded, "bold"], isInput);
+                b.appendChild(tokenPost);
+            } else formatLine(text, b, [...excluded, "bold"], isInput);
             dest.appendChild(b);
         } else if (italic !== undefined && !excluded.includes("italic")) {
             current = match.index + italic.length;
             const i = document.createElement("i");
             const text = match.groups["italictext"];
-            formatLine(isInput ? `&#42;${text}&#42;` : text, i, [...excluded, "italic"], isInput);
+            if (isInput) {
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "*";
+                i.appendChild(tokenPre);
+                formatLine(text, i, [...excluded, "italic"], isInput);
+                i.appendChild(tokenPost);
+            } else formatLine(text, i, [...excluded, "italic"], isInput);
             dest.appendChild(i);
         } else if (under !== undefined && !excluded.includes("under")) {
             current = match.index + under.length;
             const u = document.createElement("u");
             const text = match.groups["undertext"];
-            formatLine(isInput ? `&#95;&#95;${text}&#95;&#95;` : text, u, [...excluded, "under"], isInput);
+            if (isInput) {
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "__";
+                u.appendChild(tokenPre);
+                formatLine(text, u, [...excluded, "under"], isInput);
+                u.appendChild(tokenPost);
+            } else formatLine(text, u, [...excluded, "under"], isInput);
             dest.appendChild(u);
         } else if (strike !== undefined && !excluded.includes("strike")) {
             current = match.index + strike.length;
             const s = document.createElement("s");
             const text = match.groups["striketext"];
-            formatLine(isInput ? `&#126;&#126;${text}&#126;&#126;` : text, s, [...excluded, "strike"], isInput);
+            if (isInput) {
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "~~";
+                s.appendChild(tokenPre);
+                formatLine(text, s, [...excluded, "strike"], isInput);
+                s.appendChild(tokenPost);
+            } else formatLine(text, s, [...excluded, "strike"], isInput);
             dest.appendChild(s);
         } else if (spoiler !== undefined && !excluded.includes("spoiler")) {
             current = match.index + spoiler.length;
             const sp = document.createElement("span");
             const text = match.groups["spoilertext"];
-            sp.classList.add(isInput? "spoiler-preview" : "spoiler");
-            formatLine(isInput ? `&#124;&#124;${text}&#124;&#124;` : text, sp, [...excluded, "spoiler", isInput]);
+            sp.classList.add("spoiler");
+            sp.tabIndex = -1;
+            if (isInput) {
+                sp.classList.add("view");
+                const tokenPre = document.createElement("span");
+                const tokenPost = document.createElement("span");
+                tokenPre.classList.add("formatting-token");
+                tokenPost.classList.add("formatting-token");
+                tokenPre.innerText = tokenPost.innerText = "||";
+                sp.appendChild(tokenPre);
+                formatLine(text, sp, [...excluded, "spoiler"], isInput);
+                sp.appendChild(tokenPost);
+            } else formatLine(text, sp, [...excluded, "spoiler", isInput]);
             dest.appendChild(sp);
         } else if (excluded.length < 1) {
             throw new Error("unknown match");
         }
     }
 
-    const lastPlainText = document.createElement("span");
-    lastPlainText.innerText = unescapeFormattedText(line.slice(current));
-    dest.appendChild(lastPlainText);
+    if (isInput)
+        unescapeFormattedTextInput(line.slice(current), dest);
+    else {
+        const lastPlainText = document.createElement("span");
+        lastPlainText.innerText = unescapeFormattedText(line.slice(current));
+        if (lastPlainText.innerText.length > 0)
+            dest.appendChild(lastPlainText);
+    }
 }
 
 /**
@@ -205,10 +312,19 @@ function formatText(text, dest, excluded, isInput) {
             current = match.index + codeblock.length;
             const pre = document.createElement("pre");
             const c = document.createElement("code");
-            c.innerText = match.groups["codeblocktext"];
+            if (isInput) {
+                const pre = document.createElement("span");
+                const post = document.createElement("span");
+                pre.classList.add("formatting-token");
+                post.classList.add("formatting-token");
+                pre.innerText = post.innerText = "```";
+                c.appendChild(pre);
+                unescapeFormattedTextInput(`${match.groups["codeblocklang"] || ""}\n${match.groups["codeblocktext"]}`, c);
+                c.appendChild(post);
+            } else c.innerText = unescapeFormattedText(match.groups["codeblocktext"]);
             const lang = (match.groups["codeblocklang"] || "").trim();
             if (lang.length > 0)
-                c.setAttribute("lang", lang);
+                c.setAttribute("language", lang);
             pre.appendChild(c);
             dest.appendChild(pre);
         } else if (bullets !== undefined && !excluded.includes("bullets")) {
@@ -303,8 +419,8 @@ function formatText(text, dest, excluded, isInput) {
         const tline = line.trim();
         if (tline.length > 0) {
             const p = document.createElement("p");
-            formatLine(tline, p, excluded, isInput);
             dest.appendChild(p);
+            formatLine(tline, p, excluded, isInput);
         }
     }
 }
@@ -347,13 +463,46 @@ function prepFormattingText(text) {
 
 /**
  * @param {string} text
- * @return {string}
+ * @returns {string}
  */
 function unescapeFormattedText(text) {
     return text.replaceAll(/&#[0-9]+?;/g, m => {
         const doc = new DOMParser().parseFromString(m, "text/html");
         return doc.documentElement.textContent;
     });
+}
+
+/**
+ * @param {string} text
+ * @param {HTMLElement} dest
+ */
+function unescapeFormattedTextInput(text, dest) {
+    let current = 0;
+    for (const match of text.matchAll(/&#[0-9]+?;/g)) {
+        const plainText = document.createElement("span");
+        plainText.innerText = text.slice(current, match.index);
+        if (plainText.innerText.length > 0)
+            dest.appendChild(plainText);
+
+        const m = match[0];
+        current = match.index + m.length;
+        const doc = new DOMParser().parseFromString(m, "text/html");
+
+        const backslashToken = document.createElement("span");
+        const restored = document.createElement("span");
+        backslashToken.classList.add("formatting-token");
+        backslashToken.innerText = "\\";
+        restored.innerText = doc.documentElement.textContent;
+
+        if (prepFormattingText("\\"+restored.innerText) !== restored.innerText)
+            dest.appendChild(backslashToken)
+        dest.appendChild(restored);
+    }
+
+    const lastPlainText = document.createElement("span");
+    lastPlainText.innerText = text.slice(current);
+    if (lastPlainText.innerText.length > 0)
+        dest.appendChild(lastPlainText);
 }
 
 window.addEventListener("load", () => {
