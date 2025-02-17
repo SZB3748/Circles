@@ -1,0 +1,65 @@
+.spoiler {
+    border-radius: 5px;
+    background-color: #555;
+    color: transparent;
+    cursor: pointer;
+}
+
+.spoiler:focus, .spoiler:focus-within, .spoiler.view {
+    background-color: #aaa;
+    color: unset;
+    cursor: unset;
+}
+
+.a-preview {
+    color: #339;
+    border-bottom: 1px dotted #339;
+}
+
+.a-preview .formatting-token {
+    color: #779;
+}
+
+.formatting-token {
+    color: #666;
+}
+
+.formatting-textarea {
+    display: block;
+    overflow: auto;
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+    border: 1px solid #000;
+    border-radius: 5px;
+
+    font-family: inherit;
+    font-optical-sizing: inherit;
+    font-weight: inherit;
+    font-style: inherit;
+    font-variation-settings: inherit;
+    
+}
+
+.formatting-textarea:focus-within {
+    border-width: 2px;
+}
+
+.formatting-textarea:focus-within .cursor {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+    border-left: 1px solid #000;
+}
+.formatting-textarea:focus-within .cursor-start {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+    border-left: 1px solid #00f;
+}
+.formatting-textarea:focus-within .cursor-end {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+    border-right: 1px solid #f00;
+}

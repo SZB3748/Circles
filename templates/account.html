@@ -1,9 +1,11 @@
 {{template "base" .}}
 {{define "title"}}Circles | Account{{end}}
 {{define "styles"}}
+<link rel="stylesheet" as="style" type="text/css" href="/static/css/formatting.css">
 <link rel="stylesheet" as="style" type="text/css" href="/static/css/account.css">
 {{end}}
 {{define "scripts"}}
+<script src="/static/js/formatting.js"></script>
 <script src="/static/js/account.js"></script>
 {{if .IsMine}}
 <script src="/static/js/account_edit.js"></script>

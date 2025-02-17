@@ -1,6 +1,8 @@
 
 let editing = false;
 let editFile = null;
+/** @type {FormattingTextArea?} */
+let editBioTextArea = null;
 
 /**
  * @param {string} src
@@ -45,11 +47,9 @@ function confirmReload(ev) {
     /** @type {HTMLImageElement} */
     const accountIcon = document.getElementById("account-icon");
     const accountBio = document.getElementById("account-bio");
-    /** @type {HTMLTextAreaElement} */
-    const bioEdit = document.getElementById("account-bio-edit");
     const iconEdit = document.getElementById("edit-icon");
     if (nameEdit.value !== nameEdit.getAttribute("original")
-        || bioEdit.value !== accountBio.getAttribute("raw")
+        || editBioTextArea.inner.value !== accountBio.getAttribute("raw")
         || accountIcon.src !== iconEdit.getAttribute("original")
         || document.querySelector("#edit-icon-preview-container:not(.hidden)") != null)
         ev.preventDefault();
@@ -87,10 +87,17 @@ function enterEditMode() {
     accountName.innerHTML = "";
     accountName.appendChild(nameEdit);
 
-    const bioEdit = document.createElement("textarea");
+    const bioEdit = document.createElement("pre");
     bioEdit.id = "account-bio-edit";
+    bioEdit.classList.add("formatting-textarea");
+    bioEdit.tabIndex = -1;
+    editBioTextArea = new FormattingTextArea(document.createElement("textarea"), bioEdit);
+
     const bioRaw = accountBio.getAttribute("raw");
-    bioEdit.value = bioRaw;
+
+    editBioTextArea.inner.value = bioRaw;
+    editBioTextArea.redraw();
+
     while (accountBio.children.length > 0)
         accountBio.firstChild.remove();
     accountBio.appendChild(bioEdit);
@@ -162,14 +169,12 @@ async function saveEdits() {
     const accountIcon = document.getElementById("account-icon");
     const iconEdit = document.getElementById("edit-icon");
     const accountBio = document.getElementById("account-bio");
-    /** @type {HTMLTextAreaElement} */
-    const bioEdit = document.getElementById("account-bio-edit");
 
     const data = new FormData();
     if (nameEdit.value !== nameEdit.getAttribute("original"))
         data.set("displayname", nameEdit.value);
-    if (bioEdit.value !== accountBio.getAttribute("raw"))
-        data.set("bio", bioEdit.value);
+    if (editBioTextArea.inner.value !== accountBio.getAttribute("raw"))
+        data.set("bio", editBioTextArea.inner.value);
     if (accountIcon.src !== iconEdit.getAttribute("original"))
         data.set("pfp", editFile);
 
