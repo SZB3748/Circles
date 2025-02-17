@@ -4,15 +4,7 @@ function formatBio() {
     const raw = accountBio.getAttribute("raw");
     while (accountBio.children.length > 0)
         accountBio.firstChild.remove();
-    const lines = raw.split("\n");
-    for (const lineRaw of lines) {
-        const line = lineRaw.trim();
-        if (line.length <= 0)
-            continue;
-        const p = document.createElement("p");
-        p.innerText = line;
-        accountBio.appendChild(p);
-    }
+    formatText(prepFormattingText(raw), accountBio, ["header"]);
 }
 
 window.addEventListener("load", () => {
