@@ -3,7 +3,7 @@ const SELECTION_START_CHARACTER = "\0\x01";
 const SELECTION_END_CHARACTER = "\0\x02";
 
 const REGEX_LINE_FORMAT_ALL =
-/(?<header>^(?<headerlevel>[#]{1,6})\x20(?<headertext>.+))|(?<url>(\[(?<urlhref>(?:https:\/\/)?(?<urldomain>[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b)(?<urlpath>[-a-zA-Z0-9()@:%_\+.~#?&\/=]*))\](?:\((?<urlname>.*)\))?))|(?<code3>[`]{3}(?<code3text>.+?)(?=[`]{3}(?:[^\n`]|$))[`]{3})|(?<code>`(?<codetext>.+?)(?=`(?:[^\n`]|$))`)|(?<bold>[*]{2}(?<boldtext>.+?)(?=[*]{2}(?:[^\n*]|$))[*]{2})|(?<italic>\*(?<italictext>.+?)(?=\*(?:[^\n*]|$))\*)|(?<under>[_]{2}(?<undertext>.+?)[_]{2})|(?<strike>[~]{2}(?<striketext>.+?)[~]{2})|(?<spoiler>[\|]{2}(?<spoilertext>.+?)[\|]{2})/g;
+/(?<header>^(?<headerlevel>[#]{1,6})\x20(?<headertext>.+))|(?<url>(\[(?<urlname>.*)?\]\((?<urlhref>(?:https:\/\/)?(?<urldomain>[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b)(?<urlpath>[-a-zA-Z0-9()@:%_\+.~#?&\/=]*))\)))|(?<code3>[`]{3}(?<code3text>.+?)(?=[`]{3}(?:[^\n`]|$))[`]{3})|(?<code>`(?<codetext>.+?)(?=`(?:[^\n`]|$))`)|(?<bold>[*]{2}(?<boldtext>.+?)(?=[*]{2}(?:[^\n*]|$))[*]{2})|(?<italic>\*(?<italictext>.+?)(?=\*(?:[^\n*]|$))\*)|(?<under>[_]{2}(?<undertext>.+?)[_]{2})|(?<strike>[~]{2}(?<striketext>.+?)[~]{2})|(?<spoiler>[\|]{2}(?<spoilertext>.+?)[\|]{2})/g;
 
 const REGEX_LINES_FORMAT_ALL = /(?<codeblock>[`]{3}(?<codeblocklang>.+?)?\n(?<codeblocktext>[\s\S]*?)(?=[`]{3}(?:[^\n`]|$))[`]{3})|(?<bullets>^[^\S\n]*(?:\-|[0-9]+\.).+(?:\n[^\S\n]*(?:\-|[0-9]+\.).+)*)/gm;
 
@@ -57,34 +57,27 @@ function formatLine(line, dest, excluded, isInput) {
             const name = match.groups["urlname"];
             if (isInput) {
                 const aContainer = document.createElement("span");
-                const preLink = document.createElement("span");
+                const preName = document.createElement("span");
                 const between = document.createElement("span");
-                const afterName = document.createElement("span");
+                const afterLink = document.createElement("span");
                 const linkText = document.createElement("span");
                 const nameText = document.createElement("span");
                 aContainer.classList.add("a-preview");
                 aContainer.setAttribute("href", href.startsWith(domain) ? `https://${href}` : a.href = href)
-                preLink.classList.add("formatting-token");
+                preName.classList.add("formatting-token");
                 between.classList.add("formatting-token");
-                afterName.classList.add("formatting-token");
+                afterLink.classList.add("formatting-token");
 
                 linkText.innerText = href;
-                preLink.innerText = "[";
+                preName.innerText = "[";
+                between.innerText = "](";
+                afterLink.innerText = ")";
+                if (name !== undefined && name.trim())
+                    formatLine(name, nameText, [...excluded, "url"], isInput);
+                else
+                    nameText.innerText = "";
                 
-                if (name === undefined) {
-                    between.innerText = "]";
-                    aContainer.append(preLink, linkText, between);
-                } else {
-                    between.innerText = "](";
-                    afterName.innerText = ")";
-                    if (name.trim())
-                        formatLine(name, nameText, [...excluded, "url"], isInput);
-                    else
-                        nameText.innerText = "";
-    
-                    aContainer.append(preLink, linkText, between, nameText, afterName);
-                }
-
+                aContainer.append(preName, nameText, between, linkText, afterLink);
                 dest.appendChild(aContainer);
             } else {
                 const a = document.createElement("a");
@@ -99,6 +92,7 @@ function formatLine(line, dest, excluded, isInput) {
             current = match.index + code.length;
             const c = document.createElement("code");
             const text = match.groups["codetext"];
+            c.classList.add("code");
             if (isInput) {
                 const tokenPre = document.createElement("span");
                 const tokenPost = document.createElement("span");
@@ -115,6 +109,7 @@ function formatLine(line, dest, excluded, isInput) {
             const pre = document.createElement("pre");
             const c = document.createElement("code");
             const text = match.groups["code3text"];
+            pre.classList.add("code");
             if (isInput) {
                 const tokenPre = document.createElement("span");
                 const tokenPost = document.createElement("span");
@@ -234,7 +229,6 @@ function formatLine(line, dest, excluded, isInput) {
  */
 function formatText(text, dest, excluded, isInput) {
     let current = 0;
-    let cursorPlaces = {};
     for (const match of text.matchAll(REGEX_LINES_FORMAT_ALL)) {
         const lines = text.slice(current, match.index).split("\n");
         for (const line of lines) {
@@ -253,6 +247,7 @@ function formatText(text, dest, excluded, isInput) {
             current = match.index + codeblock.length;
             const pre = document.createElement("pre");
             const c = document.createElement("code");
+            pre.classList.add("code");
             if (isInput) {
                 const pre = document.createElement("span");
                 const post = document.createElement("span");
@@ -489,8 +484,53 @@ class FormattingTextArea {
         this.outer = outer;
         /** @type {string[]} */
         this.excluded = excluded || [];
+        /** @type {number[]} */
+        this.lines = [];
+        /** @type {boolean} */
+        this.linesUpToDate = false;
+        /** @type {number} */
+        this.selectionDirection = 0;
 
         applyFormattingTextAreaEvents(this);
+    }
+
+    countLines() {
+        if (this.linesUpToDate)
+            return;
+
+        const lines = this.inner.value.split("\n");
+        let index = 0;
+        for (const line of lines) {
+            this.lines.push(index);
+            index += line.length + 1; //+1 to include the \n removed by split
+        }
+        this.linesUpToDate = true;
+    }
+
+    /**
+     * @param {number} cursor 
+     * @returns {{lineNumber: number, index: number, column: number}?}
+     */
+    getLineInfo(cursor) {
+        if (this.lines.length < 1)
+            return null;
+
+        let lineStart = 0;
+        let i = -1;
+        for (const newLineStart of this.lines) {
+            if (cursor === newLineStart)
+                return {lineNumber: i+1, index: newLineStart, column: 0};
+            else if (cursor > newLineStart) {
+                lineStart = newLineStart;
+                i++;
+            } else break;
+        }
+
+        return {
+            lineNumber: i,
+            index: lineStart,
+            column: cursor - lineStart
+        };
     }
 
     redraw() {
@@ -498,21 +538,28 @@ class FormattingTextArea {
             this.outer.firstChild.remove();
 
         let displayText;
-        if (this.inner.selectionStart == this.inner.selectionEnd)
-            displayText = this.inner.value.substring(0, this.inner.selectionStart) + CURSOR_CHARACTER + this.inner.value.substring(this.inner.selectionStart);
-        else if (this.inner.selectionDirection === "backward") {
+        if (this.selectionDirection > 0) {
             displayText = this.inner.value.substring(0, this.inner.selectionStart) + SELECTION_START_CHARACTER
                 + this.inner.value.substring(this.inner.selectionStart, this.inner.selectionEnd) + SELECTION_END_CHARACTER + CURSOR_CHARACTER
                 + this.inner.value.substring(this.inner.selectionEnd);
-        } else {
+        } else if (this.selectionDirection < 0) {
             displayText = this.inner.value.substring(0, this.inner.selectionStart) + SELECTION_START_CHARACTER + CURSOR_CHARACTER
                 + this.inner.value.substring(this.inner.selectionStart, this.inner.selectionEnd) + SELECTION_END_CHARACTER
                 + this.inner.value.substring(this.inner.selectionEnd);
-        }
+        } else
+            displayText = this.inner.value.substring(0, this.inner.selectionStart) + CURSOR_CHARACTER + this.inner.value.substring(this.inner.selectionStart);
+
 
         formatText(prepFormattingText(displayText), this.outer, this.excluded, true);
 
-        //TODO re-apply event listeners for `outer` children
+        this.outer.querySelectorAll(":scope .a-preview").forEach(/** @param {HTMLSpanElement} elm */elm => {
+            elm.title = "Ctrl + Click to Navigate";
+            elm.addEventListener("click", ev => {
+                const href = elm.getAttribute("href");
+                if (href && ev.ctrlKey)
+                    window.open(href, "_blank");
+            });
+        });
     }
 };
 
@@ -520,6 +567,7 @@ class FormattingTextArea {
  * @param {FormattingTextArea} area
  */
 function applyFormattingTextAreaEvents(area) {
+    /** @param {string} c */
     const insertCharacter = c => {
         if (area.inner.selectionStart || area.inner.selectionStart == 0) {
             const start = area.inner.selectionStart;
@@ -529,7 +577,44 @@ function applyFormattingTextAreaEvents(area) {
         } else {
             area.inner.value += ev.key;
         }
+        area.linesUpToDate = false;
         area.redraw();
+    };
+
+    /**
+     * @param {number} pos
+     * @param {KeyboardEvent} ev
+     */
+    const moveSelectionStart = (pos, ev) => {
+        area.inner.selectionStart = pos;
+        if (!ev.shiftKey || area.inner.selectionEnd == pos) {
+            area.inner.selectionEnd = pos;
+            area.selectionDirection = 0;
+            return;
+        } else if (area.inner.selectionEnd < pos) {
+            area.inner.selectionStart = area.inner.selectionEnd;
+            area.inner.selectionEnd = pos;
+        }
+        if (area.selectionDirection == 0)
+            area.selectionDirection = -1;
+    };
+    /**
+     * @param {number} pos
+     * @param {KeyboardEvent} ev
+     */
+    const moveSelectionEnd = (pos, ev) => {
+        area.inner.selectionEnd = pos;
+        if (!ev.shiftKey || area.inner.selectionStart == pos) {
+            area.inner.selectionStart = pos;
+            area.selectionDirection = 0;
+            return;
+        } else if (area.inner.selectionStart > pos) {
+            area.inner.selectionEnd = area.inner.selectionStart;
+            area.inner.selectionStart = pos;
+            area.selectionDirection *= -1;
+        }
+        if (area.selectionDirection == 0)
+            area.selectionDirection = 1;
     };
 
     area.outer.addEventListener("keydown", ev => {
@@ -550,6 +635,8 @@ function applyFormattingTextAreaEvents(area) {
             } else {
                 area.inner.value = area.inner.value.substring(0, area.inner.value.length - 1);
             }
+            area.selectionDirection = 0;
+            area.linesUpToDate = false;
             area.redraw();
             break;
         }
@@ -560,8 +647,10 @@ function applyFormattingTextAreaEvents(area) {
                 const end = area.inner.selectionEnd;
                 area.inner.value = area.inner.value.substring(0, start) + area.inner.value.substring(end+Number(start == end));
                 area.inner.selectionStart = area.inner.selectionEnd = start;
-                area.redraw();
             }
+            area.selectionDirection = 0;
+            area.linesUpToDate = false;
+            area.redraw();
             break;
         }
         case "Escape": {
@@ -576,42 +665,45 @@ function applyFormattingTextAreaEvents(area) {
         }
         case "End": {
             ev.preventDefault();
+            const moveFunc = area.selectionDirection < 0 ? moveSelectionStart : moveSelectionEnd;
+            const selectionLead = area.selectionDirection < 0 ? area.inner.selectionStart : area.inner.selectionEnd;
             if (ev.ctrlKey) {
-                area.inner.selectionEnd = area.inner.value.length;
-                if (!ev.shiftKey)
-                    area.inner.selectionStart = area.inner.selectionEnd;
+                moveFunc(area.inner.value.length, ev);
             } else {
-                let lineEnd = area.inner.value.indexOf("\n", area.inner.selectionEnd);
-                if (lineEnd < 0)
-                    lineEnd = area.inner.value.length;
-                area.inner.selectionEnd = lineEnd;
-                if (!ev.shiftKey)
-                    area.inner.selectionStart = lineEnd;
+                area.countLines();
+                const lineInfo = area.getLineInfo(selectionLead);
+                if (lineInfo == null || lineInfo.lineNumber >= area.lines.length-1)
+                    moveFunc(area.inner.value.length, ev);
+                else
+                    moveFunc(area.lines[lineInfo.lineNumber+1] - 1, ev);
             }
+            area.redraw();
             break;
         }
         case "Home": {
             ev.preventDefault();
+            const moveFunc = area.selectionDirection > 0 ? moveSelectionEnd : moveSelectionStart;
+            const selectionLead = area.selectionDirection > 0 ? area.inner.selectionEnd : area.inner.selectionStart;
             if (ev.ctrlKey) {
-                area.inner.selectionStart = 0;
-                if (!ev.shiftKey)
-                    area.inner.selectionEnd = 0;
+                moveFunc(0, ev);
             } else {
-                const lineStart = area.inner.value.slice(0, area.inner.selectionStart).lastIndexOf("\n")+1;
-                area.inner.selectionStart = lineStart;
-                if (!ev.shiftKey)
-                    area.inner.selectionEnd = lineStart;
+                area.countLines();
+                const lineInfo = area.getLineInfo(selectionLead);
+                const lineStart = lineInfo == null ? 0 : lineInfo.index;
+                moveFunc(lineStart, ev);
             }
+            area.redraw();
             break;
         }
         case "ArrowLeft": {
             ev.preventDefault();
-            if (!ev.shiftKey && area.inner.selectionStart != area.inner.selectionEnd)
+            if (!ev.shiftKey && area.inner.selectionStart != area.inner.selectionEnd) {
                 area.inner.selectionEnd = area.inner.selectionStart;
-            else {
-                area.inner.selectionStart = Math.max(area.inner.selectionStart-1, 0);
-                if (!ev.shiftKey)
-                    area.inner.selectionEnd = area.inner.selectionStart;
+                area.selectionDirection = 0;
+            } else {
+                const moveFunc = area.selectionDirection > 0 ? moveSelectionEnd : moveSelectionStart;
+                const selectionLead = area.selectionDirection > 0 ? area.inner.selectionEnd : area.inner.selectionStart;
+                moveFunc(Math.max(selectionLead-1, 0), ev);
             }
             area.redraw();
             break;
@@ -621,21 +713,19 @@ function applyFormattingTextAreaEvents(area) {
             if (ev.ctrlKey) {
                 //scroll
             } else {
-                const lineStart = area.inner.value.slice(0, area.inner.selectionStart).lastIndexOf("\n")+1;
-                if (lineStart == 0) {
-                    area.inner.selectionStart = 0;
-                    if (!ev.shiftKey)
-                        area.inner.selectionEnd = 0;
+                area.countLines();
+                const moveFunc = area.selectionDirection > 0 ? moveSelectionEnd : moveSelectionStart;
+                const selectionLead = area.selectionDirection > 0 ? area.inner.selectionEnd : area.inner.selectionStart;
+                const currentLineInfo = area.getLineInfo(selectionLead);
+                if (currentLineInfo === null || currentLineInfo.lineNumber-1 < 0) {
+                    moveFunc(0, ev);
                 } else {
-                    const column = area.inner.selectionStart - lineStart;
-                    const nextLineStart = area.inner.value.slice(0, lineStart-1).lastIndexOf("\n")+1;
-                    const nextLineLength = area.inner.value.indexOf("\n", nextLineStart) - nextLineStart;
-
-                    area.inner.selectionStart = nextLineStart + Math.min(column, nextLineLength);
-                    if (!ev.shiftKey)
-                        area.inner.selectionEnd = area.inner.selectionStart;
+                    const prevLineStart = area.lines[currentLineInfo.lineNumber-1];
+                    const prevLineLength = currentLineInfo.index - prevLineStart - 1; // -1 to exclude the newline
+                    moveFunc(prevLineStart + Math.min(currentLineInfo.column, prevLineLength), ev);
                 }
             }
+            area.redraw();
             break;
         }
         case "ArrowRight": {
@@ -643,30 +733,31 @@ function applyFormattingTextAreaEvents(area) {
             if (!ev.shiftKey && area.inner.selectionStart !== area.inner.selectionEnd)
                 area.inner.selectionStart = area.inner.selectionEnd;
             else {
-                area.inner.selectionEnd = Math.min(area.inner.selectionEnd+1, area.inner.value.length);
-                if (!ev.shiftKey)
-                    area.inner.selectionStart = area.inner.selectionEnd;
+                const moveFunc = area.selectionDirection < 0 ? moveSelectionStart : moveSelectionEnd;
+                const selectionLead = area.selectionDirection < 0 ? area.inner.selectionStart : area.inner.selectionEnd;
+                moveFunc(Math.min(selectionLead+1, area.inner.value.length), ev);
             }
+            area.redraw();
             break;
         }
         case "ArrowDown": {
             ev.preventDefault();
             if (ev.ctrlKey) {
                 //scroll
-            } else if (area.inner.selectionEnd < area.inner.value.length) {
-                const lineStart = area.inner.value.slice(0, area.inner.selectionStart).lastIndexOf("\n")+1;
-                const column = area.inner.selectionStart - lineStart;
-                const nextLineStart = area.inner.value.indexOf("\n", lineStart)+1;
-                if (nextLineStart < lineStart)
-                    area.inner.selectionEnd = area.inner.value.length;
+            } else {
+                area.countLines();
+                const moveFunc = area.selectionDirection < 0 ? moveSelectionStart : moveSelectionEnd;
+                const selectionLead = area.selectionDirection ? 0 > area.inner.selectionStart : area.inner.selectionEnd;
+                const currentLineInfo = area.getLineInfo(selectionLead);
+                if (currentLineInfo === null || currentLineInfo.lineNumber+1 >= area.lines.length)
+                    moveFunc(area.inner.value.length, ev);
                 else {
-                    const nextLineEnd =  area.inner.value.indexOf("\n", nextLineStart);
-                    const nextLineLength = (nextLineEnd < 0 ? area.inner.value.length : nextLineEnd) - nextLineStart;
-                    area.inner.selectionEnd = nextLineStart + Math.min(column, nextLineLength);
+                    const nextLineStart = area.lines[currentLineInfo.lineNumber+1];
+                    const nextLineLength = nextLineStart - currentLineInfo.index - 1;
+                    moveFunc(nextLineStart + Math.min(currentLineInfo.column, nextLineLength), ev);
                 }
-                if (!ev.shiftKey)
-                    area.inner.selectionStart = area.inner.selectionEnd;
             }
+            area.redraw();
             break;
         }
         case "Tab":
@@ -679,13 +770,47 @@ function applyFormattingTextAreaEvents(area) {
             break;
         default: {
             if (ev.key.length > 1)
-                return;
+                break;
+            else if (ev.ctrlKey) {
+                switch (ev.key) {
+                case "a":
+                    ev.preventDefault();
+                    area.inner.selectionStart = 0;
+                    area.inner.selectionEnd = area.inner.value.length;
+                    area.redraw();
+                    break;
+                case "x":
+                case "c": {
+                    ev.preventDefault();
+                    const start = area.inner.selectionStart;
+                    const end = area.inner.selectionEnd;
+                    if (start != end) {
+                        const selection = area.inner.value.substring(start, end + 1);
+                        if (selection.length > 0)
+                            navigator.clipboard.writeText(selection);
+                        if (ev.key === "x") {
+                            area.inner.value = area.inner.value.substring(0, start) + area.inner.value.substring(end);
+                            area.inner.selectionStart = area.inner.selectionEnd = start;
+                            area.linesUpToDate = false;
+                        }
+                    }
+                    area.redraw();
+                    break;
+                }
+                case "v":
+                    ev.preventDefault();
+                    navigator.clipboard.readText().then(text => {
+                        insertCharacter(text);
+                    });
+                    break;
+                }
+                break;
+            }
 
             ev.preventDefault();
             insertCharacter(ev.key);
             break;
         }
         }
-        area.redraw();
     });
 }

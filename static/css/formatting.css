@@ -20,6 +20,10 @@
     color: #779;
 }
 
+.code {
+    background-color: #ddd;
+}
+
 .formatting-token {
     color: #666;
 }
