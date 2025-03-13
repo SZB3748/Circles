@@ -36,26 +36,41 @@ func templatesEnsureNoCircularDependency(t *Template, visited []*Template) ([]*T
 	return visited, circularTemplate, isCircular
 }
 
-func templatesFlattenDependencies(t *Template, flattened []*Template) []*Template {
+func templatesFlattenDependencies(t *Template, rm map[string]*TemplateRendererEntry, flattened []*TemplateRendererEntry) []*TemplateRendererEntry {
 	for _, dt := range t.Dependencies {
 		found := false
-		for _, vt := range flattened {
-			if dt == vt {
+		for _, ve := range flattened {
+			if dt == ve.T {
 				found = true
 			}
 		}
 		if found {
 			continue
 		}
-		flattened = append(flattened, dt)
+		flattened = append(flattened, rm[dt.Name])
 	}
 	return flattened
+}
+
+func templatesAddDependents(dm map[*Template]*TemplateDependent, t *Template) *TemplateDependent {
+	tr, ok := dm[t]
+	if !ok {
+		tr = &TemplateDependent{T: t, Dependents: nil}
+		dm[t] = tr
+	}
+
+	for _, d := range t.Dependencies {
+		dr := templatesAddDependents(dm, d)
+		dr.Dependents = append(dr.Dependents, tr)
+	}
+
+	return tr
 }
 
 type Template struct {
 	Name string
 	Path string
-	Dependencies []*Template
+	Dependencies []*Template //list of explicit dependencies
 	Modified time.Time
 	Built *template.Template
 }
@@ -71,21 +86,53 @@ func (t *Template) IsLatest() (bool, time.Time, error) {
 
 type TemplateRendererEntry struct {
 	T *Template
-	DependencyList []*Template
+	DependencyList []*TemplateRendererEntry //list of all dependencies
 }
 
 func (e *TemplateRendererEntry) Paths() []string {
 	l := len(e.DependencyList)
 	paths := make([]string, l, l+1)
 	for i := l-1; i > -1; i-- {
-		paths[i-l+1] = e.DependencyList[i].Path
+		paths[i-l+1] = e.DependencyList[i].T.Path
 	}
 	paths = append(paths, e.T.Path)
 	return paths
 }
 
+func (e *TemplateRendererEntry) Update(r *TemplateRenderer) (bool, error) {
+	latest, mod, err := e.T.IsLatest()
+	if err != nil {
+		return false, err
+	} else if latest {
+		return false, nil
+	}
+	
+	tmpl := template.New(e.T.Name).Funcs(r.FuncMap)
+	paths := e.Paths()
+	tmpl, err = tmpl.ParseFiles(paths...)
+	if err != nil {
+		return false, err
+	}
+	e.T.Modified = mod
+	e.T.Built = tmpl
+	return true, nil
+}
+
+type TemplateDependent struct {
+	T *Template
+	Dependents []*TemplateDependent //list of templates that directly depend on this template
+}
+
+func (d *TemplateDependent) ExpireDependents() {
+	for _, dr := range d.Dependents {
+		dr.ExpireDependents()
+		dr.T.Modified = time.Time{}
+	}
+}
+
 type TemplateRenderer struct {
 	Templates map[string]*TemplateRendererEntry
+	DependentTrees map[*Template]*TemplateDependent
 	FuncMap template.FuncMap
 	uptodate bool
 }
@@ -121,7 +168,9 @@ func (r *TemplateRenderer) UpdateDependecies() error {
 			builder.WriteString(found[lenMin1].Name)
 			return fmt.Errorf("error while updating TemplateRenderer dependencies: Template %s has circular dependency: %s (%s)", e.T.Name, ct.Name, builder.String())
 		}
-		e.DependencyList = templatesFlattenDependencies(e.T, e.DependencyList[:0])
+		templatesAddDependents(r.DependentTrees, e.T)
+		e.DependencyList = templatesFlattenDependencies(e.T, r.Templates, e.DependencyList[:0])
+
 	}
 	r.uptodate = true
 	return nil
@@ -129,36 +178,21 @@ func (r *TemplateRenderer) UpdateDependecies() error {
 
 func (r *TemplateRenderer) Load(name string) (*TemplateRendererEntry, error) {
 	e := r.Templates[name]
-	isLatest := e.T.Built != nil
-
-	for _, dt := range e.T.Dependencies {
-		before := dt.Modified
-		_, err := r.Load(dt.Name)
+	l := len(e.DependencyList)
+	for i := l-1; i > -1; i-- {
+		de := e.DependencyList[i]
+		ok, _, err := de.T.IsLatest()
 		if err != nil {
 			return e, err
+		} else if !ok {
+			r.DependentTrees[de.T].ExpireDependents()
+			break
 		}
-		if isLatest {
-			after := dt.Modified
-			isLatest = after.Equal(before)
-		}
-
 	}
-	
-	latest, mod, err := e.T.IsLatest()
-	if err != nil {
-		return e, err
-	} else if latest && isLatest {
-		return e, nil
-	}
-	
-	tmpl := template.New(e.T.Name).Funcs(r.FuncMap)
-	paths := e.Paths()
-	tmpl, err = tmpl.ParseFiles(paths...)
+	_, err := e.Update(r)
 	if err != nil {
 		return e, err
 	}
-	e.T.Modified = mod
-	e.T.Built = tmpl
 	return e, nil
 }
 
@@ -187,6 +221,7 @@ func NewTemplateSource(name string, path string, dependencies ...*Template) *Tem
 func NewTemplateRenderer() *TemplateRenderer {
 	return &TemplateRenderer{
 		Templates: make(map[string]*TemplateRendererEntry),
+		DependentTrees: make(map[*Template]*TemplateDependent),
 		FuncMap: make(template.FuncMap),
 		uptodate: true,
 	}
