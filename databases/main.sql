@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS role_permissions (
     role_id BIGINT NOT NULL,
     circle_id BIGINT NOT NULL,
     permission_number BIGINT NOT NULL,
-    granted BIT NOT NULL,
+    granted BIT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS role_members (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,

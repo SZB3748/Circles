@@ -3,6 +3,11 @@ package main
 import (
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +23,23 @@ type PermissionNumber = int64
 const (
 	COM_TYPE_POST CommunicationType = 0
 	COM_TYPE_MESSAGE CommunicationType = 1
+
+	ROLE_NAME_EVERYONE string = "::everyone"
 )
+
+type DuplicateCircleNameError struct {
+	message string
+}
+func (err *DuplicateCircleNameError) Error() string {
+	return err.message
+}
+
+type DuplicateRoleNameError struct {
+	message string
+}
+func (err *DuplicateRoleNameError) Error() string {
+	return err.message
+}
 
 type Permission struct {
 	Name string
@@ -29,6 +50,8 @@ type Permission struct {
 type PermissionsList = map[PermissionNumber]bool
 
 var (
+	CIRCLES_INIT_DIR string = filepath.Join(CONFIG_DIR, "circles_init.json")
+	
 	PERM_VIEW_CIRCLE = Permission{Name: "view_circle", DisplayName: "View Circle", Number: 1}
 	PERM_CHANGE_CIRCLE_NAME = Permission{Name: "change_circle_name", DisplayName: "Change Circle Name", Number: 2}
 	PERM_CREATE_SUBCIRCLE = Permission{Name: "create_subcircle", DisplayName: "Create Subcircle", Number: 3}
@@ -86,7 +109,7 @@ var (
 		return rtv
 	}()
 
-	DEFAULT_ROLE_COLOR = [3]byte{0x7f, 0x7f, 0x7f}
+	DEFAULT_ROLE_COLOR = []byte{0x7f, 0x7f, 0x7f}
 )
 
 type CircleInfo struct {
@@ -97,7 +120,7 @@ type CircleInfo struct {
 	Created  time.Time
 	ComType  CommunicationType
 
-    DefaultSubcircleComType CommunicationType
+    DefaultSubcircleComType *CommunicationType
     DefaultSubcirclePermissions PermissionsList
 }
 
@@ -113,10 +136,13 @@ type RoleInfo struct {
 	CircleId CircleId
 	Order int
 	Name string
-	Color [3]uint8
+	Color []uint8
 }
 
 func PermissionsFromBytes(data []byte) PermissionsList {
+	if len(data) < 1 {
+		return nil
+	}
     length := binary.BigEndian.Uint64(data)
     if length == 0 {
         return nil
@@ -444,9 +470,9 @@ func GetAccountRolesInfo(account AccountId, circle CircleId) ([]RoleInfo, error)
 					return nil, err
 				}
 				if color != nil {
-					roleInfo.Color = [3]uint8(color)
+					roleInfo.Color = color
 				} else {
-					roleInfo.Color = DEFAULT_ROLE_COLOR
+					copy(roleInfo.Color, DEFAULT_ROLE_COLOR)
 				}
                 roleList = append(roleList, roleInfo)
 			}
@@ -463,4 +489,227 @@ func GetAccountRolesInfo(account AccountId, circle CircleId) ([]RoleInfo, error)
 	}
 
 	return roleList, nil
+}
+
+//check for permissions before calling
+func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]PermissionsList) (CircleId, error) {
+	var circleId CircleId = 0
+
+	row := MainDB.QueryRow("SELECT id FROM circles WHERE parent_id=? AND name=?", circle.ParentId, circle.Name)
+	var checkId CircleId
+	err := row.Scan(&checkId)
+	if err == nil {
+		if circle.ParentId == nil {
+			return checkId, &DuplicateCircleNameError{message: fmt.Sprintf("duplicate circle name %s at root", circle.Name)}
+		} else {
+			return checkId, &DuplicateCircleNameError{message: fmt.Sprintf("duplicate circle name %s in parent circle %d", circle.Name, *circle.ParentId)}
+		}
+	} else if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+
+	tx, err := MainDB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	//commit := true
+	defer func() {
+		//will assign to err before it gets returned
+		if err == nil {
+			if err = tx.Commit(); err != nil {
+				circleId = 0
+			}
+		} else {
+			circleId = 0
+			if e := tx.Rollback(); e != nil {
+				err = e
+			}
+		}
+	}()
+
+	defaultSubcirclePermissions := PermissionsToBytes(circle.DefaultSubcirclePermissions)
+
+	r, err := tx.Exec(`INSERT INTO circles (parent_id, owner_id, name, com_type, default_subcircle_com_type, default_subcircle_permissions)
+				VALUES(?, ?, ?, ?, ?, ?)`,
+		circle.ParentId, circle.OwnerId, circle.Name, circle.ComType, circle.DefaultSubcircleComType, defaultSubcirclePermissions,
+	)
+	if err != nil {
+		return 0, err
+	}
+	circleId, err = r.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	roleNames := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		//check for duplicate names
+		if _, ok := roleNames[role.Name]; ok {
+			err = &DuplicateRoleNameError{message: fmt.Sprintf("duplicate role name %s for circle %d", role.Name, circleId)}
+			return 0, err
+		}
+		//add role to circle
+		r, err = tx.Exec(`INSERT INTO roles (circle_id, priority_order, name, color) VALUES(?, ?, ?, ?)`, circleId, role.Order, role.Name, role.Color)
+		if err != nil {
+			return 0, err
+		}
+		var roleId int64
+		roleId, err = r.LastInsertId()
+		if err != nil {
+			return 0, err
+		}
+		roleNames[role.Name] = struct{}{} //keep track of used names
+
+		//add permissions to role
+		permList, ok := permissions[role.Name]
+		if ok {
+			for permNum, granted := range permList {
+				_, err = tx.Exec(`INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)`, roleId, circleId, permNum, granted)
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+
+	if _, ok := roleNames[ROLE_NAME_EVERYONE]; !ok {
+		r, err = tx.Exec(`INSERT INTO roles (circle_id, priority_order, name, color) VALUES(?, ?, ?, ?)`, circleId, (1<<31)-1, ROLE_NAME_EVERYONE, nil)
+		if err != nil {
+			return 0, err
+		}
+		var roleId int64
+		roleId, err = r.LastInsertId()
+		if err != nil {
+			return 0, err
+		}
+		permList, ok := permissions[ROLE_NAME_EVERYONE]
+		if ok {
+			for permNum, granted := range permList {
+				_, err = tx.Exec(`INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)`, roleId, circleId, permNum, granted)
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+
+	return circleId, err //returning err to allow the deferred function to modify the error value, but it is initially nil
+}
+
+func InitCircles() error {
+	initJson, err := os.ReadFile(CIRCLES_INIT_DIR)
+	if err != nil {
+		return err
+	}
+	initData := make(map[string]interface{})
+	if err := json.Unmarshal(initJson, &initData); err != nil {
+		return err
+	}
+
+	for name, infoAny := range initData {
+		info := infoAny.(map[string]interface{})
+		var parentId *CircleId
+		if parentIdAny, ok := info["parent_id"]; ok && parentIdAny != nil {
+			parentId = parentIdAny.(*CircleId)
+		} else {
+			parentId = nil
+		}
+		ownerId := info["owner_id"].(AccountId)
+		comType := info["com_type"].(CommunicationType)
+		var (
+			roles []RoleInfo = nil
+			permissions map[string]PermissionsList = nil
+			defaultComType *CommunicationType = nil
+			defaultPermissions PermissionsList = nil
+		)
+		if defaultAny, ok := info["default_subcircle"]; ok && defaultAny != nil {
+			defaultInfo := defaultAny.(map[string]interface{})
+			if c, ok := defaultInfo["com_type"]; ok && c != nil {
+				defaultComType = c.(*CommunicationType)
+			}
+			if permsAny, ok := defaultInfo["permissions"]; ok && permsAny != nil {
+				perms := permsAny.(map[string]interface{})
+				defaultPermissions = make(PermissionsList, len(perms))
+				for name, value := range perms {
+					if granted, ok := value.(bool); ok {
+						if perm, ok := PERMS_NAME_MAP[name]; ok {
+							defaultPermissions[perm.Number] = granted
+						}
+					}
+				}
+			}
+		}
+
+		if rolesAny, ok := info["roles"]; ok {
+			rolesInfo := rolesAny.(map[string]interface{})
+			roles = make([]RoleInfo, 0, len(rolesInfo))
+			permissions = make(map[string]PermissionsList, len(rolesInfo))
+			for name, roleInfoAny := range rolesInfo {
+				role := RoleInfo{Name: name}
+				roleInfo := roleInfoAny.(map[string]interface{})
+				if colorAny, ok := roleInfo["color"]; ok && colorAny != nil {
+					colorStr := colorAny.(string)
+					color, err := hex.DecodeString(colorStr)
+					if err != nil {
+						return err
+					}
+					role.Color = color
+				} else {
+					role.Color = nil
+				}
+				if orderAny, ok := roleInfo["order"]; ok && orderAny != nil {
+					role.Order = orderAny.(int)
+				} else {
+					role.Order = (1<<31) - 1
+				}
+				if permissionsInfoAny, ok := roleInfo["permissions"]; ok && permissionsInfoAny != nil {
+					permissionsInfo := permissionsInfoAny.(map[string]interface{})
+					rolePerms := make(PermissionsList, len(permissionsInfo))
+					for pname, grantedAny := range permissionsInfo {
+						if granted, ok := grantedAny.(bool); ok {
+							if perm, ok := PERMS_NAME_MAP[pname]; ok {
+								rolePerms[perm.Number] = granted
+							}
+						}
+					}
+					if len(rolePerms) > 0 {
+						permissions[name] = rolePerms
+					}
+				}
+				roles = append(roles, role)
+
+			}
+		}
+
+		newCircleInfo := CircleInfo{
+			ParentId: parentId,
+			OwnerId: ownerId,
+			Name: name,
+			ComType: comType,
+			DefaultSubcircleComType: defaultComType,
+			DefaultSubcirclePermissions: defaultPermissions,
+		}
+		if checkId, err := CreateCircle(newCircleInfo, roles, permissions); err != nil {
+			if _, ok := err.(*DuplicateCircleNameError); ok {
+				row := MainDB.QueryRow("SELECT name, parent_id, owner_id, com_type, default_subcircle_com_type, default_subcircle_permissions FROM circles WHERE id=?", checkId)
+				var (
+					existName string
+					existParentId *CircleId
+					existOwnerId AccountId
+					existComType CommunicationType
+					existDefaultComType CommunicationType
+					existDefaultPermissions []byte
+				)
+				err := row.Scan(&existName, &existParentId, &existOwnerId, &existComType, &existDefaultComType, &existDefaultPermissions)
+				if err != nil {
+					return err
+				}
+
+				//TODO make any necessary updates
+			}
+		}
+	}
+
+	return nil
 }
