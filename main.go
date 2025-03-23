@@ -39,6 +39,10 @@ func main() {
 		panic(err)
 	}
 
+	if err = InitCircles(); err != nil {
+		panic(err)
+	}
+
 	err = StartServer("127.0.0.1", 8080)
 	if err != nil {
 		panic(err)

@@ -18,6 +18,7 @@ type CommunicationType = int8
 type AccountId = int64
 type MemberId = int64
 type RoleId = int64
+type PermissionId = int64
 type PermissionNumber = int64
 
 const (
@@ -611,12 +612,22 @@ func InitCircles() error {
 		info := infoAny.(map[string]interface{})
 		var parentId *CircleId
 		if parentIdAny, ok := info["parent_id"]; ok && parentIdAny != nil {
-			parentId = parentIdAny.(*CircleId)
+			parentIdStr := parentIdAny.(string)
+			parentIdValue, err := strconv.ParseInt(parentIdStr, 10, 64)
+			if err != nil {
+				return err
+			}
+			parentId = &parentIdValue
 		} else {
 			parentId = nil
 		}
-		ownerId := info["owner_id"].(AccountId)
-		comType := info["com_type"].(CommunicationType)
+		ownerIdStr := info["owner_id"].(string)
+		ownerIdValue, err := strconv.ParseInt(ownerIdStr, 10, 64)
+		if err != nil {
+			return err
+		}
+		var ownerId AccountId = ownerIdValue
+		comType := int8(info["com_type"].(float64))
 		var (
 			roles []RoleInfo = nil
 			permissions map[string]PermissionsList = nil
@@ -626,7 +637,8 @@ func InitCircles() error {
 		if defaultAny, ok := info["default_subcircle"]; ok && defaultAny != nil {
 			defaultInfo := defaultAny.(map[string]interface{})
 			if c, ok := defaultInfo["com_type"]; ok && c != nil {
-				defaultComType = c.(*CommunicationType)
+				defaultComTypeValue := int8(c.(float64))
+				defaultComType = &defaultComTypeValue
 			}
 			if permsAny, ok := defaultInfo["permissions"]; ok && permsAny != nil {
 				perms := permsAny.(map[string]interface{})
@@ -641,10 +653,9 @@ func InitCircles() error {
 			}
 		}
 
-		if rolesAny, ok := info["roles"]; ok {
+		if rolesAny, ok := info["roles"]; ok && rolesAny != nil {
 			rolesInfo := rolesAny.(map[string]interface{})
 			roles = make([]RoleInfo, 0, len(rolesInfo))
-			permissions = make(map[string]PermissionsList, len(rolesInfo))
 			for name, roleInfoAny := range rolesInfo {
 				role := RoleInfo{Name: name}
 				roleInfo := roleInfoAny.(map[string]interface{})
@@ -659,26 +670,37 @@ func InitCircles() error {
 					role.Color = nil
 				}
 				if orderAny, ok := roleInfo["order"]; ok && orderAny != nil {
-					role.Order = orderAny.(int)
+					role.Order = int(orderAny.(float64))
 				} else {
 					role.Order = (1<<31) - 1
 				}
-				if permissionsInfoAny, ok := roleInfo["permissions"]; ok && permissionsInfoAny != nil {
-					permissionsInfo := permissionsInfoAny.(map[string]interface{})
-					rolePerms := make(PermissionsList, len(permissionsInfo))
-					for pname, grantedAny := range permissionsInfo {
-						if granted, ok := grantedAny.(bool); ok {
-							if perm, ok := PERMS_NAME_MAP[pname]; ok {
-								rolePerms[perm.Number] = granted
-							}
+				roles = append(roles, role)
+			}
+		}
+		rolesNameMap := make(map[string]int, len(roles))
+		for i, roleInfo := range roles {
+			rolesNameMap[roleInfo.Name] = i
+		}
+
+		if permissionsAny, ok := info["permissions"]; ok && permissionsAny != nil {
+			permissionsInfo := permissionsAny.(map[string]interface{})
+			permissions = make(map[string]PermissionsList, len(permissionsInfo))
+			for roleName, permListAny := range permissionsInfo {
+				permListInfo, ok := permListAny.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				permList := make(PermissionsList, len(permListInfo))
+				for pname, grantedAny := range permissionsInfo {
+					if granted, ok := grantedAny.(bool); ok {
+						if perm, ok := PERMS_NAME_MAP[pname]; ok {
+							permList[perm.Number] = granted
 						}
 					}
-					if len(rolePerms) > 0 {
-						permissions[name] = rolePerms
-					}
 				}
-				roles = append(roles, role)
-
+				if len(permList) > 0 {
+					permissions[roleName] = permList
+				}
 			}
 		}
 
@@ -690,26 +712,263 @@ func InitCircles() error {
 			DefaultSubcircleComType: defaultComType,
 			DefaultSubcirclePermissions: defaultPermissions,
 		}
-		if checkId, err := CreateCircle(newCircleInfo, roles, permissions); err != nil {
-			if _, ok := err.(*DuplicateCircleNameError); ok {
-				row := MainDB.QueryRow("SELECT name, parent_id, owner_id, com_type, default_subcircle_com_type, default_subcircle_permissions FROM circles WHERE id=?", checkId)
-				var (
-					existName string
-					existParentId *CircleId
-					existOwnerId AccountId
-					existComType CommunicationType
-					existDefaultComType CommunicationType
-					existDefaultPermissions []byte
+		var createdId CircleId
+	    createdId, err = CreateCircle(newCircleInfo, roles, permissions)
+        if err != nil {
+			if _, ok := err.(*DuplicateCircleNameError); !ok {
+				return err
+			}
+
+			row := MainDB.QueryRow("SELECT owner_id, com_type, default_subcircle_com_type, default_subcircle_permissions FROM circles WHERE id=?", createdId)
+			var (
+				existOwnerId AccountId
+				existComType CommunicationType
+				existDefaultComType *CommunicationType
+				existDefaultPermissions []byte
+			)
+			err = row.Scan(&existOwnerId, &existComType, &existDefaultComType, &existDefaultPermissions)
+			if err != nil {
+				return err
+			}
+
+			changeNames := make([]string, 0, 4)
+			changeValues := make([]interface{}, 0, cap(changeNames)+1) //add the id for `WHERE id=?` at the end
+
+			if existOwnerId != ownerId {
+				changeNames = append(changeNames, "owner_id")
+				changeValues = append(changeValues, ownerId)
+			}
+			if existComType != comType {
+				changeNames = append(changeNames, "com_type")
+				changeValues = append(changeValues, comType)
+			}
+			if (defaultComType == nil && existDefaultComType == nil) || (defaultComType != nil && *defaultComType == *existDefaultComType) {
+				changeNames = append(changeNames, "default_subcircle_com_type")
+				changeValues = append(changeValues, defaultComType)
+			}
+			if defaultPermissions == nil && existDefaultPermissions == nil {
+				changeNames = append(changeNames, "default_subcircle_permissions")
+				changeValues = append(changeValues, nil)
+			} else {
+				existsDefaultPermList := PermissionsFromBytes(existDefaultPermissions)
+				changed := false
+				if len(defaultPermissions) == len(existsDefaultPermList) {
+					for number, granted := range existsDefaultPermList {
+						if otherGranted, ok := defaultPermissions[number]; !ok || granted != otherGranted {
+							changed = true
+							break
+						}
+					}
+				} else {
+					changed = true
+				}
+
+				if changed {
+					permBytes := PermissionsToBytes(defaultPermissions)
+					changeNames = append(changeNames, "default_subcircle_permissions")
+					changeValues = append(changeValues, permBytes)
+				}
+			}
+
+			var tx *sql.Tx
+			tx, err = MainDB.Begin()
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					if errRlbk := tx.Rollback(); errRlbk != nil {
+						err = errRlbk
+					}
+				} else {
+					err = tx.Commit()
+				}
+			}()
+
+			lenMin1 := len(changeNames) - 1
+			if lenMin1 >= 0 {
+				const (
+					queryStart string = "UPDATE circles SET "
+					queryEnd string = " WHERE id=?"
 				)
-				err := row.Scan(&existName, &existParentId, &existOwnerId, &existComType, &existDefaultComType, &existDefaultPermissions)
+
+				querySize := len(queryStart) + len(queryEnd) + lenMin1 * 2 + len(changeNames) * 2
+				for _, name := range changeNames {
+					querySize += len(name)
+				}
+				b := strings.Builder{}
+				b.Grow(querySize)
+				b.WriteString(queryStart)
+				for i := 0; i < lenMin1; i++ {
+					b.WriteString(changeNames[i])
+					b.WriteString("=?, ")
+				}
+				b.WriteString(changeNames[lenMin1])
+				b.WriteString("=?")
+
+				queryString := b.String()
+				changeValues = append(changeValues, createdId)
+
+				_, err = tx.Exec(queryString, changeValues...)
 				if err != nil {
 					return err
 				}
+			}
 
-				//TODO make any necessary updates
+			roleIdMap := make(map[string]RoleId) //needed when dealing with permission rows
+			roleNameMap := make(map[RoleId]string)
+			var existingRoles *sql.Rows
+
+			addRole := func(roleInfo RoleInfo) error {
+				result, err := tx.Exec(
+					"INSERT INTO roles (circle_id, priority_order, name, color) VALUES(?, ?, ?, ?)",
+					roleInfo.CircleId, roleInfo.Order, roleInfo.Name, roleInfo.Color,
+				)
+				if err != nil {
+					return err
+				}
+				var newRoleId RoleId
+				newRoleId, err = result.LastInsertId()
+				if err != nil {
+					return err
+				}
+				roleIdMap[roleInfo.Name] = newRoleId
+				roleNameMap[newRoleId] = roleInfo.Name
+				return nil
+			}
+
+			existingRoles, err = MainDB.Query(`SELECT id, name FROM roles WHERE circle_id=?`, createdId)
+			if err != nil {
+				if err == sql.ErrNoRows { //none in existing, in config
+					for _, roleInfo := range roles {
+						if err = addRole(roleInfo); err != nil {
+							return err
+						}
+					}
+				} else {
+					return err
+				}
+			} else {
+				defer existingRoles.Close()
+				var (
+					roleId RoleId
+					roleName string
+				)
+				unusedRolesSet := make(map[int]struct{})
+				for i := 0; i < len(roles); i++ {
+					unusedRolesSet[i] = struct{}{}
+				}
+				for existingRoles.Next() {
+					if err = existingRoles.Scan(&roleId, &roleName); err != nil {
+						return err
+					}
+					if roleIndex, ok := rolesNameMap[roleName]; ok { //in existing and config
+						roleInfo := roles[roleIndex]
+						roleInfo.Id = roleId
+						roleIdMap[roleName] = roleId
+						roleNameMap[roleId] = roleName
+						_, err = tx.Exec(
+							"UPDATE roles SET priority_order=?, name=?, color=? WHERE id=?",
+							roleInfo.Order, roleInfo.Name, roleInfo.Color, roleInfo.Id,
+						)
+						if err != nil {
+							return err
+						}
+						delete(unusedRolesSet, roleIndex)
+					} else { //in existing, not in config
+						if _, err = tx.Exec("DELETE FROM roles WHERE id=?", roleId); err != nil {
+							return err
+						}
+					}
+				}
+				for roleIndex := range unusedRolesSet { //not in existing, in config
+					if err = addRole(roles[roleIndex]); err != nil {
+						return err
+					}
+				}
+			}
+
+			var existingPerms *sql.Rows
+			existingPerms, err = MainDB.Query("SELECT id, role_id, permission_number WHERE circle_id=?", createdId)
+			if err != nil {
+				if err == sql.ErrNoRows { //none in existing, in config
+					for roleName, permsList := range permissions {
+						for permNumber, granted := range permsList {
+							_, err = tx.Exec(
+								"INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)",
+								roleIdMap[roleName], createdId, permNumber, granted,
+							)
+						}
+					}
+				} else {
+					return err
+				}
+			} else {
+				defer existingPerms.Close()
+				var (
+					permId PermissionId
+					roleId RoleId
+					permissionNumber PermissionNumber
+				)
+				unusedPermissions := make(map[string]map[PermissionNumber]struct{})
+				for roleName, permList := range permissions {
+					unusedForRole := make(map[PermissionNumber]struct{})
+					for number := range permList {
+						unusedForRole[number] = struct{}{}
+					}
+					unusedPermissions[roleName] = unusedForRole
+				}
+				for existingPerms.Next() {
+					if err = existingPerms.Scan(&permId, &roleId, &permissionNumber); err != nil {
+						return err
+					}
+					var roleName string
+					//try checking the name map before doing a query
+					if name, ok := roleNameMap[roleId]; ok {
+						roleName = name
+					} else {
+						row := MainDB.QueryRow("SELECT name FROM roles WHERE id=?", roleId)
+						if err = row.Scan(&roleName); err != nil {
+							return err
+						}
+						roleNameMap[roleId] = roleName
+					}
+
+					nfound := true
+					if permList, ok := permissions[roleName]; ok {
+						if granted, ok := permList[permissionNumber]; ok { //in existing, in config
+							nfound = false
+							_, err = tx.Exec("UPDATE role_permissions SET granted=? WHERE id=?", granted, permId)
+							if err != nil {
+								return err
+							}
+							if permUnused, ok := unusedPermissions[roleName]; ok {
+								delete(permUnused, permissionNumber)
+								if len(permUnused) < 1 {
+									delete(unusedPermissions, roleName)
+								}
+							}
+						}
+					}
+
+					if nfound { //in existing, not in config
+						if _, err = tx.Exec("DELETE FROM role_permissions WHERE id=?", permId); err != nil {
+							return err
+						}
+					}
+				}
+
+				for roleName, permsList := range unusedPermissions { //not in existing, in config
+					for permNumber, granted := range permsList {
+						_, err = tx.Exec(
+							"INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)",
+							roleIdMap[roleName], createdId, permNumber, granted,
+						)
+					}
+				}
 			}
 		}
 	}
 
-	return nil
+	return err
 }
