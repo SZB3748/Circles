@@ -87,7 +87,7 @@ var (
 	PERM_REMOVE_CIRCLE_MEMBERS = Permission{Name: "remove_circle_members", DisplayName: "Remove Circle Members", Number: 32}
 	PERM_BAN_CIRCLE_MEMBERS = Permission{Name: "ban_circle_members", DisplayName: "Ban Circle Members", Number: 33}
 	PERM_MUTE_CIRCLE_MEMBERS = Permission{Name: "mute_circle_members", DisplayName: "Mute Circle Members", Number: 34}
-    PERM_MENTION_EVERYONE = Permission{Name: "mention_everyone", DisplayName: "Mention @everyone"}
+    PERM_MENTION_EVERYONE = Permission{Name: "mention_everyone", DisplayName: "Mention @everyone", Number: 35}
 
 	PERMS_MANAGE_SUBCIRCLE = []Permission{PERM_CREATE_SUBCIRCLE, PERM_DELETE_SUBCIRCLE}
 	PERMS_ALLOW_MARKDOWN = []Permission{PERM_ALLOW_MD_HEADERS, PERM_ALLOW_MD_LINKS, PERM_ALLOW_MD_LISTS, PERM_ALLOW_MD_CODE, PERM_ALLOW_MD_CODE_BLOCK, PERM_ALLOW_MD_BOLD, PERM_ALLOW_MD_ITALIC, PERM_ALLOW_MD_UNDERSCORE, PERM_ALLOW_MD_STRIKE, PERM_ALLOW_MD_SPOILER}
@@ -105,6 +105,9 @@ var (
 	PERMS_NAME_MAP = func()map[string]Permission {
 		rtv := make(map[string]Permission, len(PERMS_ALL))
 		for _, p := range PERMS_ALL {
+			if p.Number == 0 {
+				panic(fmt.Errorf("unassigned permission number: %s", p.Name))
+			}
 			rtv[p.Name] = p
 		}
 		return rtv
@@ -150,9 +153,9 @@ func PermissionsFromBytes(data []byte) PermissionsList {
     }
     list := make(PermissionsList, length)
 
-    grantBits := (length + (8 - 1)) / 8
+    grantBitsCount := (length + (8 - 1)) / 8
     grantBitsIndex := 0
-    cursor := 8 + grantBits
+    cursor := 8 + grantBitsCount
 
     for i := uint64(0); i < length; i++ {
         permissionNumber := int64(binary.BigEndian.Uint64(data[cursor:]))
@@ -169,27 +172,28 @@ func PermissionsToBytes(list PermissionsList) []byte {
     if length == 0 {
         return []byte{0,0,0,0,0,0,0,0}
     }
-    grantBits := (length + (8 - 1)) / 8
+    grantBitsCount := (length + (8 - 1)) / 8
 
-    b := make([]byte, 8 + grantBits + length * 8)
+    b := make([]byte, 8 + grantBitsCount + length * 8)
     binary.BigEndian.PutUint64(b, uint64(length))
     grantByte := uint8(0)
     grantBitsIndex := 0
-    cursor := 8 + grantBits
+    cursor := 8 + grantBitsCount
 
     for permissionNumber, granted := range list {
         binary.BigEndian.PutUint64(b[cursor:], uint64(permissionNumber))
         if granted {
-            grantByte &= uint8(1 << (grantBitsIndex % 8))
+            grantByte |= uint8(1 << (grantBitsIndex % 8))
         }
         if grantBitsIndex % 8 == 7 { // == 7 because index is pointing to the end of this byte
             b[8 + grantBitsIndex / 8] = grantByte
+            grantByte = 0
         }
         cursor += 8
         grantBitsIndex++
     }
-    if length % 8 != 0 { //if byte wasn't already added
-        b[8 + grantBitsIndex / 8 - 1] = grantByte // - 1 because index is pointing at a non-existent next byte
+    if grantBitsIndex % 8 != 0 { //if byte wasn't already added
+        b[8 + (grantBitsIndex - 1) / 8] = grantByte // - 1 because index is pointing at a non-existent next byte
     }
 
     return b
@@ -496,7 +500,12 @@ func GetAccountRolesInfo(account AccountId, circle CircleId) ([]RoleInfo, error)
 func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]PermissionsList) (CircleId, error) {
 	var circleId CircleId = 0
 
-	row := MainDB.QueryRow("SELECT id FROM circles WHERE parent_id=? AND name=?", circle.ParentId, circle.Name)
+	var row *sql.Row
+	if circle.ParentId == nil {
+		row = MainDB.QueryRow("SELECT id FROM circles WHERE parent_id is NULL AND name=?", circle.Name)
+	} else {
+		row = MainDB.QueryRow("SELECT id FROM circles WHERE parent_id=? AND name=?", circle.ParentId, circle.Name)
+	}
 	var checkId CircleId
 	err := row.Scan(&checkId)
 	if err == nil {
@@ -508,7 +517,6 @@ func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]Pe
 	} else if err != sql.ErrNoRows {
 		return 0, err
 	}
-
 
 	tx, err := MainDB.Begin()
 	if err != nil {
@@ -529,7 +537,10 @@ func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]Pe
 		}
 	}()
 
-	defaultSubcirclePermissions := PermissionsToBytes(circle.DefaultSubcirclePermissions)
+	var defaultSubcirclePermissions []byte = nil
+	if circle.DefaultSubcirclePermissions != nil {
+		defaultSubcirclePermissions = PermissionsToBytes(circle.DefaultSubcirclePermissions)
+	}
 
 	r, err := tx.Exec(`INSERT INTO circles (parent_id, owner_id, name, com_type, default_subcircle_com_type, default_subcircle_permissions)
 				VALUES(?, ?, ?, ?, ?, ?)`,
@@ -543,7 +554,7 @@ func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]Pe
 		return 0, err
 	}
 
-	roleNames := make(map[string]struct{}, len(roles))
+	roleNames := make(map[string]RoleId, len(roles))
 	for _, role := range roles {
 		//check for duplicate names
 		if _, ok := roleNames[role.Name]; ok {
@@ -560,18 +571,7 @@ func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]Pe
 		if err != nil {
 			return 0, err
 		}
-		roleNames[role.Name] = struct{}{} //keep track of used names
-
-		//add permissions to role
-		permList, ok := permissions[role.Name]
-		if ok {
-			for permNum, granted := range permList {
-				_, err = tx.Exec(`INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)`, roleId, circleId, permNum, granted)
-				if err != nil {
-					return 0, err
-				}
-			}
-		}
+		roleNames[role.Name] = roleId //keep track of used names
 	}
 
 	if _, ok := roleNames[ROLE_NAME_EVERYONE]; !ok {
@@ -584,13 +584,22 @@ func CreateCircle(circle CircleInfo, roles []RoleInfo, permissions map[string]Pe
 		if err != nil {
 			return 0, err
 		}
-		permList, ok := permissions[ROLE_NAME_EVERYONE]
-		if ok {
-			for permNum, granted := range permList {
-				_, err = tx.Exec(`INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)`, roleId, circleId, permNum, granted)
-				if err != nil {
-					return 0, err
-				}
+		roleNames[ROLE_NAME_EVERYONE] = roleId
+	}
+
+	for roleName, permList := range permissions {
+		roleId, ok := roleNames[roleName]
+		if !ok {
+			row := MainDB.QueryRow(`SELECT id FROM roles WHERE name=?`, roleName)
+			if err = row.Scan(&roleId); err != nil {
+				return 0, err
+			}
+		}
+		//add permissions to roles
+		for permNum, granted := range permList {
+			_, err = tx.Exec(`INSERT INTO role_permissions (role_id, circle_id, permission_number, granted) VALUES(?, ?, ?, ?)`, roleId, circleId, permNum, granted)
+			if err != nil {
+				return 0, err
 			}
 		}
 	}
@@ -691,7 +700,7 @@ func InitCircles() error {
 					continue
 				}
 				permList := make(PermissionsList, len(permListInfo))
-				for pname, grantedAny := range permissionsInfo {
+				for pname, grantedAny := range permListInfo {
 					if granted, ok := grantedAny.(bool); ok {
 						if perm, ok := PERMS_NAME_MAP[pname]; ok {
 							permList[perm.Number] = granted
@@ -742,14 +751,14 @@ func InitCircles() error {
 				changeNames = append(changeNames, "com_type")
 				changeValues = append(changeValues, comType)
 			}
-			if (defaultComType == nil && existDefaultComType == nil) || (defaultComType != nil && *defaultComType == *existDefaultComType) {
+			if ((defaultComType == nil) != (existDefaultComType == nil) || (defaultComType != nil && *defaultComType == *existDefaultComType)) {
 				changeNames = append(changeNames, "default_subcircle_com_type")
 				changeValues = append(changeValues, defaultComType)
 			}
-			if defaultPermissions == nil && existDefaultPermissions == nil {
+			if defaultPermissions == nil && existDefaultPermissions != nil {
 				changeNames = append(changeNames, "default_subcircle_permissions")
 				changeValues = append(changeValues, nil)
-			} else {
+			} else if defaultPermissions != nil {
 				existsDefaultPermList := PermissionsFromBytes(existDefaultPermissions)
 				changed := false
 				if len(defaultPermissions) == len(existsDefaultPermList) {
@@ -776,6 +785,9 @@ func InitCircles() error {
 				return err
 			}
 			defer func() {
+				if rerr, ok := recover().(error); ok && rerr != nil {
+					err = rerr
+				}
 				if err != nil {
 					if errRlbk := tx.Rollback(); errRlbk != nil {
 						err = errRlbk
@@ -799,13 +811,15 @@ func InitCircles() error {
 				b := strings.Builder{}
 				b.Grow(querySize)
 				b.WriteString(queryStart)
-				for i := 0; i < lenMin1; i++ {
+				for i := range lenMin1 {
 					b.WriteString(changeNames[i])
 					b.WriteString("=?, ")
 				}
 				b.WriteString(changeNames[lenMin1])
 				b.WriteString("=?")
+				b.WriteString(queryEnd)
 
+				
 				queryString := b.String()
 				changeValues = append(changeValues, createdId)
 
@@ -889,7 +903,7 @@ func InitCircles() error {
 			}
 
 			var existingPerms *sql.Rows
-			existingPerms, err = MainDB.Query("SELECT id, role_id, permission_number WHERE circle_id=?", createdId)
+			existingPerms, err = MainDB.Query("SELECT id, role_id, permission_number FROM role_permissions WHERE circle_id=?", createdId)
 			if err != nil {
 				if err == sql.ErrNoRows { //none in existing, in config
 					for roleName, permsList := range permissions {
@@ -910,11 +924,11 @@ func InitCircles() error {
 					roleId RoleId
 					permissionNumber PermissionNumber
 				)
-				unusedPermissions := make(map[string]map[PermissionNumber]struct{})
+				unusedPermissions := make(map[string]map[PermissionNumber]bool)
 				for roleName, permList := range permissions {
-					unusedForRole := make(map[PermissionNumber]struct{})
-					for number := range permList {
-						unusedForRole[number] = struct{}{}
+					unusedForRole := make(map[PermissionNumber]bool)
+					for number, granted := range permList {
+						unusedForRole[number] = granted
 					}
 					unusedPermissions[roleName] = unusedForRole
 				}
