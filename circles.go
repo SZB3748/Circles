@@ -836,7 +836,7 @@ func InitCircles() error {
 			addRole := func(roleInfo RoleInfo) error {
 				result, err := tx.Exec(
 					"INSERT INTO roles (circle_id, priority_order, name, color) VALUES(?, ?, ?, ?)",
-					roleInfo.CircleId, roleInfo.Order, roleInfo.Name, roleInfo.Color,
+					createdId, roleInfo.Order, roleInfo.Name, roleInfo.Color,
 				)
 				if err != nil {
 					return err
